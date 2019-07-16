@@ -25,6 +25,9 @@ namespace AzureRgCleanup
         public string ExceptedRGsRegex { get; }
         public ILogger Logger { get; }
         public IConfigurationRoot Config { get; }
+        public int DefaultExpiry { get; }
+        public int DefaultExtension { get; }
+        public int UsageLookback { get; }
 
         public AzureSubscriptionCleaner(IAuthenticated authenticated, string subscriptionId, string exceptedRGsRegex, ILogger logger, IConfigurationRoot config)
         {
@@ -33,6 +36,24 @@ namespace AzureRgCleanup
             this.ExceptedRGsRegex = exceptedRGsRegex;
             this.Logger = logger;
             this.Config = config;
+            this.DefaultExpiry = 2;
+            this.DefaultExtension = 4;
+            this.UsageLookback = 1;
+
+            if (Config["DefaultExpiry"] != null)
+            {
+                this.DefaultExpiry = Int32.Parse(Config["DefaultExpiry"]);
+            }
+
+            if (Config["DefaultExtension"] != null)
+            {
+                this.DefaultExtension = Int32.Parse(Config["DefaultExpiry"]);
+            }
+
+            if (Config["UsageLookback"] != null)
+            {
+                this.UsageLookback = Int32.Parse(Config["DefaultExpiry"]);
+            }
         }
 
         internal void ProcessSubscription()
@@ -92,7 +113,7 @@ namespace AzureRgCleanup
             }
             else
             {
-                Logger.LogInformation(rg.Name);
+                Logger.LogInformation($"Expiry on the RG {rg.Name} is set");
                 return false;
             }
         }
@@ -137,7 +158,7 @@ namespace AzureRgCleanup
         {
             if (rg.Tags != null)
             {
-                if (rg.Tags.ContainsKey("ManualSetup") || rg.Tags.ContainsKey("LongHaul"))
+                if (rg.Tags.ContainsKey("LongHaul") || rg.Tags.ContainsKey("ManualSetup") || rg.Tags.ContainsKey("DoNotDelete"))
                 {
                     return false;
                 }
@@ -162,7 +183,7 @@ namespace AzureRgCleanup
             var tags = new Dictionary<string, string>(rg.Tags);
 
             var updateRequired = false;
-
+            
             var newExpiry = then.AddDays(8).Date;
             var (isExpiryValid, expiry) = GetExpiry(rg.Tags);
 
@@ -244,6 +265,5 @@ namespace AzureRgCleanup
 
         private const string expiresBy = "ExpiresBy";
         private const string lastModifiedBy = "LastModifiedBy";
-
     }
 }
