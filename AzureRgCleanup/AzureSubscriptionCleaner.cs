@@ -1,15 +1,12 @@
 ﻿using Microsoft.Azure.Management.Fluent;
 using Microsoft.Azure.Management.Monitor.Fluent.Models;
 using Microsoft.Azure.Management.ResourceManager.Fluent;
-using Microsoft.Azure.Management.ResourceManager.Fluent.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.InteropServices.ComTypes;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using static Microsoft.Azure.Management.Fluent.Azure;
@@ -47,12 +44,12 @@ namespace AzureRgCleanup
 
             if (Config["DefaultExtension"] != null)
             {
-                this.DefaultExtension = Int32.Parse(Config["DefaultExpiry"]);
+                this.DefaultExtension = Int32.Parse(Config["DefaultExtension"]);
             }
 
             if (Config["UsageLookback"] != null)
             {
-                this.UsageLookback = Int32.Parse(Config["DefaultExpiry"]);
+                this.UsageLookback = Int32.Parse(Config["UsageLookback"]);
             }
         }
 
@@ -78,7 +75,7 @@ namespace AzureRgCleanup
                             }
                             else
                             {
-                                Logger.LogError($"{rg.Name} is not deleted");
+                                Logger.LogInformation($"{rg.Name} is not deleted");
                             }
                         }
                         else

@@ -13,7 +13,7 @@ namespace AzureRgCleanup
     {
         [FunctionName("MainFunction")]
         //public static void Run([TimerTrigger("0 */5 * * * *")]TimerInfo myTimer, ILogger logger, ExecutionContext context)
-        public static void Run([TimerTrigger("0 0 */6 * * *")]TimerInfo myTimer, ILogger logger, ExecutionContext context)
+        public static void Run([TimerTrigger("0 0 */4 * * *")]TimerInfo myTimer, ILogger logger, ExecutionContext context)
         {
             logger.LogInformation($"C# Timer trigger function starting at: {DateTime.Now}");
 
@@ -54,8 +54,16 @@ namespace AzureRgCleanup
 
             foreach (var subscriptionId in config["Subscriptions"].Split(',', StringSplitOptions.RemoveEmptyEntries))
             {
-                var subCleaner = new AzureSubscriptionCleaner(authenticated, subscriptionId, exceptedRGsRegex, logger, config);
-                subCleaner.ProcessSubscription();
+                try
+                {
+                    var subCleaner = new AzureSubscriptionCleaner(authenticated, subscriptionId, exceptedRGsRegex, logger, config);
+                    subCleaner.ProcessSubscription();
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(
+                        $"Exception occured while processing the subscription: {Environment.NewLine} {ex}");
+                }
             }
 
             logger.LogInformation($"C# Timer trigger function finishing at: {DateTime.Now}");
