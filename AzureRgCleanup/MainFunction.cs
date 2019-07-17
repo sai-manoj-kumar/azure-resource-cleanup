@@ -12,13 +12,12 @@ namespace AzureRgCleanup
     public static class MainFunction
     {
         [FunctionName("MainFunction")]
-        public static void Run([TimerTrigger("0 */1 * * * *")]TimerInfo myTimer, ILogger logger, ExecutionContext context)
-        //public static void Run([TimerTrigger("0 0 */1 * * *")]TimerInfo myTimer, ILogger log, ExecutionContext context)
+        //public static void Run([TimerTrigger("0 */5 * * * *")]TimerInfo myTimer, ILogger logger, ExecutionContext context)
+        public static void Run([TimerTrigger("0 0 */4 * * *")]TimerInfo myTimer, ILogger logger, ExecutionContext context)
         {
             logger.LogInformation($"C# Timer trigger function starting at: {DateTime.Now}");
-            //var clientId = "4addd1e5-911d-4d43-9fcd-619989d96d83";
 
-            var config = new ConfigurationBuilder()
+            IConfigurationRoot config = new ConfigurationBuilder()
                 .SetBasePath(context.FunctionAppDirectory)
                 .AddJsonFile("local.settings.json", optional: true, reloadOnChange: true)
                 .AddEnvironmentVariables()
@@ -31,8 +30,6 @@ namespace AzureRgCleanup
                 return;
             }
 
-            var clientId = config["ClientId"];
-            var clientSecret = config["ClientSecret"];
             var tenantId = config["TenantId"];
             var exceptedRGsRegex = config["Exceptions"];
             var environment = AzureEnvironment.AzureGlobalCloud;
@@ -41,6 +38,8 @@ namespace AzureRgCleanup
 
             if (isRunningLocally != null && isRunningLocally.Equals(Boolean.TrueString))
             {
+                var clientId = config["ClientId"];
+                var clientSecret = config["ClientSecret"];
                 credentials = SdkContext.AzureCredentialsFactory.FromServicePrincipal(clientId, clientSecret, tenantId, environment);
             }
             else
@@ -55,8 +54,16 @@ namespace AzureRgCleanup
 
             foreach (var subscriptionId in config["Subscriptions"].Split(',', StringSplitOptions.RemoveEmptyEntries))
             {
-                var subCleaner = new AzureSubscriptionCleaner(authenticated, subscriptionId, exceptedRGsRegex, logger);
-                subCleaner.ProcessSubscription();
+                try
+                {
+                    var subCleaner = new AzureSubscriptionCleaner(authenticated, subscriptionId, exceptedRGsRegex, logger, config);
+                    subCleaner.ProcessSubscription();
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(
+                        $"Exception occured while processing the subscription: {Environment.NewLine} {ex}");
+                }
             }
 
             logger.LogInformation($"C# Timer trigger function finishing at: {DateTime.Now}");

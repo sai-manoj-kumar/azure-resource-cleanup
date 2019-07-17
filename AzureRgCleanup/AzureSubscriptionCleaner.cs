@@ -1,11 +1,14 @@
 ﻿using Microsoft.Azure.Management.Fluent;
+using Microsoft.Azure.Management.Monitor.Fluent.Models;
 using Microsoft.Azure.Management.ResourceManager.Fluent;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using static Microsoft.Azure.Management.Fluent.Azure;
 
 namespace AzureRgCleanup
@@ -18,13 +21,36 @@ namespace AzureRgCleanup
         public string SubscriptionId { get; }
         public string ExceptedRGsRegex { get; }
         public ILogger Logger { get; }
+        public IConfigurationRoot Config { get; }
+        public int DefaultExpiry { get; }
+        public int DefaultExtension { get; }
+        public int UsageLookback { get; }
 
-        public AzureSubscriptionCleaner(IAuthenticated authenticated, string subscriptionId, string exceptedRGsRegex, ILogger logger)
+        public AzureSubscriptionCleaner(IAuthenticated authenticated, string subscriptionId, string exceptedRGsRegex, ILogger logger, IConfigurationRoot config)
         {
             this.Authenticated = authenticated;
             this.SubscriptionId = subscriptionId;
             this.ExceptedRGsRegex = exceptedRGsRegex;
             this.Logger = logger;
+            this.Config = config;
+            this.DefaultExpiry = 2;
+            this.DefaultExtension = 4;
+            this.UsageLookback = 1;
+
+            if (Config["DefaultExpiry"] != null)
+            {
+                this.DefaultExpiry = Int32.Parse(Config["DefaultExpiry"]);
+            }
+
+            if (Config["DefaultExtension"] != null)
+            {
+                this.DefaultExtension = Int32.Parse(Config["DefaultExtension"]);
+            }
+
+            if (Config["UsageLookback"] != null)
+            {
+                this.UsageLookback = Int32.Parse(Config["UsageLookback"]);
+            }
         }
 
         internal void ProcessSubscription()
@@ -34,20 +60,41 @@ namespace AzureRgCleanup
             try
             {
                 var rgs = azure.ResourceGroups.List().ToList();
-                foreach (var rg in rgs)
+                var cleanedRgs = new ConcurrentBag<IResourceGroup>();
+
+                //foreach (var rg in rgs)
+                Parallel.ForEach(rgs, rg =>
                 {
                     try
                     {
                         if (!Regex.IsMatch(rg.Name, this.ExceptedRGsRegex))
                         {
-                            ProcessResourceGroup(rg, azure);
+                            if (ProcessResourceGroup(rg))
+                            {
+                                cleanedRgs.Add(rg);
+                            }
+                            else
+                            {
+                                Logger.LogInformation($"{rg.Name} is not deleted");
+                            }
+                        }
+                        else
+                        {
+                            Logger.LogInformation($"{rg.Name} is exempted from cleanup");
                         }
                     }
                     catch (Exception ex)
                     {
                         Logger.LogError(2, ex, $"Exception occured while processing Resource Group {rg.Name}");
                     }
+                });
+
+                foreach (var rg in cleanedRgs)
+                {
+                    Logger.LogInformation($"{rg.Name} is deleted");
                 }
+
+                Logger.LogInformation($"{cleanedRgs.Count} RGs are cleaned up in the subscription {SubscriptionId}");
             }
             catch (Exception ex)
             {
@@ -55,26 +102,52 @@ namespace AzureRgCleanup
             }
         }
 
-        private void ProcessResourceGroup(IResourceGroup rg, IAzure azure)
+        private bool ProcessResourceGroup(IResourceGroup rg)
         {
             if (SetExpiryIfNotExists(rg))
             {
-                DeleteResourceGroupIfExpired(azure, rg);
-            }
-        }
-
-        private void DeleteResourceGroupIfExpired(IAzure azure, IResourceGroup rg)
-        {
-            (var _, var expiry) = GetExpiry(rg.Tags);
-            var now = DateTime.UtcNow;
-
-            if (expiry.CompareTo(now) < 0)
-            {
-                Logger.LogWarning($"RG {rg.Name} will be deleted");
+                return DeleteResourceGroupIfExpired(rg);
             }
             else
             {
-                IsModifiedAfter(azure, rg);
+                Logger.LogInformation($"Expiry on the RG {rg.Name} is set");
+                return false;
+            }
+        }
+
+        private bool DeleteResourceGroupIfExpired(IResourceGroup rg)
+        {
+            UpdateExpiryIfRecentlyModified(rg);
+
+            (var isExpiryValid, var expiry) = GetExpiry(rg.Tags);
+            var now = DateTime.UtcNow;
+
+            if (isExpiryValid && expiry.CompareTo(now) < 0)
+            {
+                if (Config["CleanupEnabled"]?.Equals(
+                    Boolean.TrueString, StringComparison.CurrentCultureIgnoreCase) == true)
+                {
+                    // Delete the Resource Group
+                    Logger.LogError($"RG {rg.Name} is being deleted");
+                    azure.ResourceGroups.DeleteByName(rg.Name);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void UpdateExpiryIfRecentlyModified(IResourceGroup rg)
+        {
+            var log = GetLatestModifiedRecord(rg);
+            if (log != null)
+            {
+                var modifiedBy = log.Inner.Caller.Substring(0, log.Inner.Caller.IndexOf('@'));
+                UpdateExpiryAndOwner(rg, (DateTime)log.EventTimestamp, modifiedBy);
+            }
+            else
+            {
+                Logger.LogInformation($"Resource Group: {rg.Name} is not modified recently");
             }
         }
 
@@ -82,33 +155,75 @@ namespace AzureRgCleanup
         {
             if (rg.Tags != null)
             {
-                if (rg.Tags.ContainsKey("ExpiresBy"))
+                if (rg.Tags.ContainsKey("LongHaul") || rg.Tags.ContainsKey("ManualSetup") || rg.Tags.ContainsKey("DoNotDelete"))
+                {
+                    return false;
+                }
+
+                if (rg.Tags.ContainsKey(expiresBy))
                 {
                     (var isExpiryValidDateTime, var _) = GetExpiry(rg.Tags);
                     if (isExpiryValidDateTime)
                     {
-                        Logger.LogInformation($"{rg.Name}: {rg.Tags["ExpiresBy"]}");
+                        Logger.LogInformation($"{rg.Name}: {rg.Tags[expiresBy]}");
                         return true;
                     }
                 }
             }
 
-            SetExpiry(rg);
+            SetDefaultExpiry(rg, DateTime.UtcNow);
             return false;
         }
 
-        private void SetExpiry(IResourceGroup rg)
+        private void UpdateExpiryAndOwner(IResourceGroup rg, DateTime then, string modifier)
         {
-            var expiry = DateTime.UtcNow.AddDays(7).ToString("o");
-            rg.Update()
-                .WithTag("ExpiresBy", expiry)
+            var tags = new Dictionary<string, string>(rg.Tags);
+
+            var updateRequired = false;
+            
+            var newExpiry = then.AddDays(8).Date;
+            var (isExpiryValid, expiry) = GetExpiry(rg.Tags);
+
+            if (!isExpiryValid || expiry.CompareTo(newExpiry) < 0)
+            {
+                tags[expiresBy] = newExpiry.ToString("o");
+                updateRequired = true;
+            }
+
+            if (!rg.Tags.ContainsKey(lastModifiedBy) || !rg.Tags[lastModifiedBy].Equals(modifier))
+            {
+                tags[lastModifiedBy] = modifier;
+                updateRequired = true;
+            }
+
+            if (updateRequired)
+            {
+                IResourceGroup updatedRg = rg.Update()
+                     .WithTags(tags)
+                     .Apply();
+                Logger.LogInformation(
+                    $"UpdateExpiryAndOwner RG:{updatedRg.Name}, LastModifiedBy: {updatedRg.Tags[lastModifiedBy]}, ExpiresBy: {updatedRg.Tags[expiresBy]}");
+            }
+        }
+
+
+        private void SetDefaultExpiry(IResourceGroup rg, DateTime then)
+        {
+            string expiry = then.AddDays(8).Date.ToString("o");
+            var tags = new Dictionary<string, string>(rg.Tags)
+            {
+                [expiresBy] = expiry
+            };
+
+            IResourceGroup updated = rg.Update()
+                .WithTags(tags)
                 .Apply();
             Logger.LogInformation($"rg:{rg.Name}, ExpiresBy: {expiry}");
         }
 
-        private bool IsModifiedAfter(IAzure azure, IResourceGroup rg)
+        private IEventData GetLatestModifiedRecord(IResourceGroup rg)
         {
-            var logs = azure.ActivityLogs
+            IEnumerable<IEventData> logs = azure.ActivityLogs
                 .DefineQuery()
                 .StartingFrom(DateTime.UtcNow.Subtract(TimeSpan.FromDays(1)))
                 .EndsBefore(DateTime.UtcNow)
@@ -116,22 +231,36 @@ namespace AzureRgCleanup
                 .FilterByResourceGroup(rg.Name)
                 .Execute();
 
-            foreach (var log in logs)
-            {
-                Logger.LogInformation(JsonConvert.SerializeObject(log));
-            }
-            
+            var filteredLogs = logs.Where(x =>
+                x.Category.Value.Equals("Administrative") &&
+                x.Inner.Caller.Contains("@") && x.EventTimestamp != null)
+                .OrderByDescending(x => x.EventTimestamp);
 
-            return true;
+            if (filteredLogs.Any())
+            {
+                var log = filteredLogs.First();
+                //Logger.LogInformation(JsonConvert.SerializeObject(log));
+                return log;
+            }
+            else
+            {
+                return null;
+            }
         }
 
         private (bool, DateTime) GetExpiry(IReadOnlyDictionary<string, string> tags)
         {
-            var expiry = tags["ExpiresBy"];
+            if (!tags.ContainsKey(expiresBy))
+            {
+                return (false, default(DateTime));
+            }
+
+            var expiry = tags[expiresBy];
             DateTime expiryDate;
             return (DateTime.TryParse(expiry, out expiryDate), expiryDate);
         }
 
-
+        private const string expiresBy = "ExpiresBy";
+        private const string lastModifiedBy = "LastModifiedBy";
     }
 }
