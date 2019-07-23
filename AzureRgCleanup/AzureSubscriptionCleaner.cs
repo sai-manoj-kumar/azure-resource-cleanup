@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -85,7 +86,7 @@ namespace AzureRgCleanup
                     }
                     catch (Exception ex)
                     {
-                        Logger.LogError(2, ex, $"Exception occured while processing Resource Group {rg.Name}");
+                        Logger.LogError(2, ex, $"Exception {ex}, occured while processing Resource Group {rg.Name}");
                     }
                 });
 
@@ -104,13 +105,21 @@ namespace AzureRgCleanup
 
         private bool ProcessResourceGroup(IResourceGroup rg)
         {
-            if (SetExpiryIfNotExists(rg))
+            try
             {
-                return DeleteResourceGroupIfExpired(rg);
+                if (SetExpiryIfNotExists(rg))
+                {
+                    return DeleteResourceGroupIfExpired(rg);
+                }
+                else
+                {
+                    Logger.LogInformation($"Expiry on the RG {rg.Name} is set");
+                    return false;
+                }
             }
-            else
+            catch (Exception ex)
             {
-                Logger.LogInformation($"Expiry on the RG {rg.Name} is set");
+                Logger.LogError($"Exception {ex} occured while processing the RG {rg.Name}");
                 return false;
             }
         }
@@ -131,6 +140,10 @@ namespace AzureRgCleanup
                     Logger.LogError($"RG {rg.Name} is being deleted");
                     azure.ResourceGroups.DeleteByName(rg.Name);
                     return true;
+                }
+                else
+                {
+                    Logger.LogInformation("Cleanup is not enabled");
                 }
             }
 
@@ -169,6 +182,10 @@ namespace AzureRgCleanup
                         return true;
                     }
                 }
+                else
+                {
+                    SetDefaultExpiry(rg, DateTime.UtcNow);
+                }
             }
 
             SetDefaultExpiry(rg, DateTime.UtcNow);
@@ -181,7 +198,7 @@ namespace AzureRgCleanup
 
             var updateRequired = false;
             
-            var newExpiry = then.AddDays(8).Date;
+            var newExpiry = then.AddDays(this.DefaultExtension).Date;
             var (isExpiryValid, expiry) = GetExpiry(rg.Tags);
 
             if (!isExpiryValid || expiry.CompareTo(newExpiry) < 0)
@@ -209,8 +226,9 @@ namespace AzureRgCleanup
 
         private void SetDefaultExpiry(IResourceGroup rg, DateTime then)
         {
-            string expiry = then.AddDays(8).Date.ToString("o");
-            var tags = new Dictionary<string, string>(rg.Tags)
+            string expiry = then.AddDays(this.DefaultExpiry).Date.ToString("o");
+            var currentTags = rg.Tags ?? new Dictionary<string, string>();
+            var tags = new Dictionary<string, string>(currentTags)
             {
                 [expiresBy] = expiry
             };
@@ -225,7 +243,7 @@ namespace AzureRgCleanup
         {
             IEnumerable<IEventData> logs = azure.ActivityLogs
                 .DefineQuery()
-                .StartingFrom(DateTime.UtcNow.Subtract(TimeSpan.FromDays(1)))
+                .StartingFrom(DateTime.UtcNow.Subtract(TimeSpan.FromDays(this.UsageLookback)))
                 .EndsBefore(DateTime.UtcNow)
                 .WithAllPropertiesInResponse()
                 .FilterByResourceGroup(rg.Name)
