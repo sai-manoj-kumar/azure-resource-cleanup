@@ -6,6 +6,7 @@ using Microsoft.Azure.WebJobs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Collections.Generic;
 
 namespace AzureRgCleanup
 {
@@ -57,7 +58,15 @@ namespace AzureRgCleanup
                 try
                 {
                     var subCleaner = new AzureSubscriptionCleaner(authenticated, subscriptionId, exceptedRGsRegex, logger, config);
-                    subCleaner.ProcessSubscription();
+                    using (logger.BeginScope(
+                        new Dictionary<string, object>
+                        {
+                            [nameof(subscriptionId)] = subscriptionId
+                        })
+                    )
+                    {
+                        subCleaner.ProcessSubscription();
+                    }
                 }
                 catch (Exception ex)
                 {
