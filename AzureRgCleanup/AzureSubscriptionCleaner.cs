@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using static Microsoft.Azure.Management.Fluent.Azure;
 
@@ -61,41 +62,43 @@ namespace AzureRgCleanup
             try
             {
                 var rgs = azure.ResourceGroups.List().ToList();
-                var cleanedRgs = new ConcurrentBag<IResourceGroup>();
+                var cleanedRgsCount = 0;
 
                 //foreach (var rg in rgs)
                 Parallel.ForEach(rgs, rg =>
                 {
-                    try
+                    using (Logger.BeginScope(new Dictionary<string, object>
                     {
-                        if (!Regex.IsMatch(rg.Name, this.ExceptedRGsRegex))
+                        ["ResourceGroup"] = rg.Name
+                    }))
+                    {
+                        try
                         {
-                            if (ProcessResourceGroup(rg))
+                            if (!Regex.IsMatch(rg.Name, this.ExceptedRGsRegex))
                             {
-                                cleanedRgs.Add(rg);
+                                if (ProcessResourceGroup(rg))
+                                {
+                                    Logger.LogInformation($"{rg.Name} is deleted");
+                                    Interlocked.Increment(ref cleanedRgsCount);
+                                }
+                                else
+                                {
+                                    Logger.LogInformation($"{rg.Name} is not deleted");
+                                }
                             }
                             else
                             {
-                                Logger.LogInformation($"{rg.Name} is not deleted");
+                                Logger.LogInformation($"{rg.Name} is exempted from cleanup");
                             }
                         }
-                        else
+                        catch (Exception ex)
                         {
-                            Logger.LogInformation($"{rg.Name} is exempted from cleanup");
+                            Logger.LogError(2, ex, $"Exception {ex}, occured while processing Resource Group {rg.Name}");
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        Logger.LogError(2, ex, $"Exception {ex}, occured while processing Resource Group {rg.Name}");
-                    }
                 });
-
-                foreach (var rg in cleanedRgs)
-                {
-                    Logger.LogInformation($"{rg.Name} is deleted");
-                }
-
-                Logger.LogInformation($"{cleanedRgs.Count} RGs are cleaned up in the subscription {SubscriptionId}");
+                
+                Logger.LogInformation($"{cleanedRgsCount} RGs are cleaned up in the subscription {SubscriptionId}");
             }
             catch (Exception ex)
             {

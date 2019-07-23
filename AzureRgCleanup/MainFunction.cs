@@ -13,8 +13,7 @@ namespace AzureRgCleanup
     public static class MainFunction
     {
         [FunctionName("MainFunction")]
-        //public static void Run([TimerTrigger("0 */1 * * * *")]TimerInfo myTimer, ILogger logger, ExecutionContext context)
-        public static void Run([TimerTrigger("0 0 */1 * * *")]TimerInfo myTimer, ILogger logger, ExecutionContext context)
+        public static void Run([TimerTrigger("0 0 */1 * * *", RunOnStartup = true)]TimerInfo myTimer, ILogger logger, ExecutionContext context)
         {
             logger.LogInformation($"C# Timer trigger function starting at: {DateTime.Now}");
 
