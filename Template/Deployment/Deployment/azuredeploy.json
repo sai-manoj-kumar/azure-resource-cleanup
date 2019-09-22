@@ -25,8 +25,8 @@
     },
     "runtime": {
       "type": "string",
-      "defaultValue": "node",
-      "allowedValues": ["node", "dotnet", "java"],
+      "defaultValue": "dotnet",
+      "allowedValues": ["dotnet"],
       "metadata": {
         "description": "The language worker runtime to load in the function app."
       }
@@ -34,9 +34,9 @@
   },
   "variables": {
     "functionAppName": "[parameters('appName')]",
-    "hostingPlanName": "[parameters('appName')]",
-    "applicationInsightsName": "[parameters('appName')]",
-    "storageAccountName": "[concat(uniquestring(resourceGroup().id), 'azfunctions')]",
+    "hostingPlanName": "[concat(parameters('appName'), 'Hosting')]",
+    "applicationInsightsName": "[concat(parameters('appName'), 'AppInsights')]",
+    "storageAccountName": "[concat(uniquestring(resourceGroup().id), 'strg')]",
     "storageAccountid": "[concat(resourceGroup().id,'/providers/','Microsoft.Storage/storageAccounts/', variables('storageAccountName'))]",
     "functionWorkerRuntime": "[parameters('runtime')]"
   },
