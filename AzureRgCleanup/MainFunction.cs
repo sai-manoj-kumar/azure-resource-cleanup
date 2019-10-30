@@ -15,7 +15,7 @@ namespace AzureRgCleanup
         [FunctionName("MainFunction")]
         public static void Run([TimerTrigger("0 0 */6 * * *", RunOnStartup = true)]TimerInfo myTimer, ILogger logger, ExecutionContext context)
         {
-            logger.LogInformation($"C# Timer trigger function starting at: {DateTime.Now}");
+            logger.LogInformation($"C# Timer trigger function starting at: {DateTime.UtcNow}");
 
             IConfigurationRoot config = new ConfigurationBuilder()
                 .SetBasePath(context.FunctionAppDirectory)
